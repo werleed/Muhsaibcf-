@@ -476,4 +476,210 @@ def show_user_menu(update: Update, context: CallbackContext):
         update.message.reply_text(text + '\n\n' + edit_note, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     return MENU
 
-def menu_button_handler(update: Update, context
+def menu_button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    chat_id = str(query.message.chat.id)
+    query.answer()
+    data = query.data
+    if data == 'edit':
+        if not editing_allowed():
+            query.message.reply_text(tr(chat_id, 'editing_disabled'))
+            return MENU
+        buttons = [[InlineKeyboardButton(f, callback_data=f'fld_{f}')] for f in EDITABLE_FIELDS]
+        buttons.append([InlineKeyboardButton('⬅ Back', callback_data='back')])
+        query.message.reply_text(tr(chat_id, 'choose_field'), reply_markup=InlineKeyboardMarkup(buttons))
+        return CHOOSING_FIELD
+    elif data == 'refresh':
+        load_csv()
+        session = _sessions.get(chat_id)
+        if not session or not session.get('verified'):
+            query.message.reply_text(tr(chat_id, 'not_verified'))
+            return ConversationHandler.END
+        idx = session['index']
+        with _data_lock:
+            row = _df.loc[int(idx)]
+            text = format_user_record(row)
+        query.message.reply_text('Refreshed record:\n' + text, parse_mode=ParseMode.MARKDOWN)
+        return MENU
+    elif data == 'logout':
+        _sessions.pop(chat_id, None)
+        save_sessions()
+        query.message.reply_text(tr(chat_id, 'logout'))
+        return ConversationHandler.END
+    elif data.startswith('fld_'):
+        field = data.split('fld_', 1)[1]
+        if field not in EDITABLE_FIELDS:
+            query.message.reply_text('This field cannot be edited.')
+            return MENU
+        _sessions[chat_id]['editing_field'] = field
+        save_sessions()
+        query.message.reply_text(tr(chat_id, 'send_new_value', field=field), parse_mode=ParseMode.MARKDOWN)
+        return TYPING_VALUE
+    elif data == 'back':
+        return show_user_menu(update, context)
+    else:
+        query.message.reply_text('Unknown action')
+        return MENU
+
+def receive_new_value(update: Update, context: CallbackContext):
+    chat_id = str(update.effective_chat.id)
+    session = _sessions.get(chat_id)
+    if not session or not session.get('verified'):
+        update.message.reply_text(tr(chat_id, 'not_verified'))
+        return ConversationHandler.END
+    field = session.get('editing_field')
+    if not field:
+        update.message.reply_text('No field selected. Use Edit Info to pick a field.')
+        return MENU
+    if not editing_allowed():
+        update.message.reply_text(tr(chat_id, 'editing_disabled'))
+        return MENU
+    new_value = update.message.text.strip()
+    idx = int(session['index'])
+    with _data_lock:
+        old = _df.at[idx, field]
+        _df.at[idx, field] = new_value
+        if 'LastModified' in _df.columns:
+            _df.at[idx, 'LastModified'] = datetime.utcnow().isoformat()
+    saved = save_csv_with_backup(reason=f'edit_by_{chat_id}_{field}')
+    if saved:
+        update.message.reply_text(tr(chat_id, 'updated_success', field=field, old=old, new=new_value), parse_mode=ParseMode.MARKDOWN)
+        log_action(f'User chat:{chat_id} updated {field} from "{old}" to "{new_value}" for row {idx}')
+    else:
+        update.message.reply_text('⚠️ Failed to save changes. Please contact admin.')
+    session.pop('editing_field', None)
+    save_sessions()
+    # show updated record
+    with _data_lock:
+        row = _df.loc[idx]
+        text = format_user_record(row)
+    update.message.reply_text('Updated record:\n' + text, parse_mode=ParseMode.MARKDOWN)
+    return MENU
+
+
+# ---------------- Admin Commands ----------------
+@admin_only
+def cmd_all(update: Update, context: CallbackContext):
+    with _data_lock:
+        if _df is None or _df.empty:
+            update.message.reply_text('CSV is empty or not loaded')
+            return
+        cols = ['FullName', 'Email', 'Phone', 'AdmissionNumber']
+        for i, row in _df[cols].iterrows():
+            update.message.reply_text(f"{i}: {row.to_dict()}")
+
+@admin_only
+def cmd_reload(update: Update, context: CallbackContext):
+    load_csv()
+    update.message.reply_text(tr(update.effective_chat.id, 'csv_reloaded'))
+
+@admin_only
+def cmd_stats(update: Update, context: CallbackContext):
+    with _data_lock:
+        n = 0 if _df is None else _df.shape[0]
+    update.message.reply_text(tr(update.effective_chat.id, 'rows_count', n=n, days=days_since_start(), left=days_left_to_edit()))
+
+@admin_only
+def cmd_backup(update: Update, context: CallbackContext):
+    dest = backup_csv(reason='admin_command')
+    if dest:
+        update.message.reply_text(tr(update.effective_chat.id, 'backup_done', path=dest))
+    else:
+        update.message.reply_text(tr(update.effective_chat.id, 'backup_failed'))
+
+@admin_only
+def cmd_find(update: Update, context: CallbackContext):
+    args = context.args
+    if not args:
+        update.message.reply_text(tr(update.effective_chat.id, 'find_usage'))
+        return
+    q = ' '.join(args).strip()
+    with _data_lock:
+        if _df is None or _df.empty:
+            update.message.reply_text('CSV empty')
+            return
+        mask = _df['Email'].astype(str).str.contains(q, case=False, na=False) | _df['Phone'].astype(str).str.contains(q, na=False)
+        results = _df[mask]
+        if results.empty:
+            update.message.reply_text(tr(update.effective_chat.id, 'no_results'))
+            return
+        for i, row in results.iterrows():
+            update.message.reply_text(format_user_record(row), parse_mode=ParseMode.MARKDOWN)
+
+# ---------------- Misc handlers ----------------
+def cmd_help(update: Update, context: CallbackContext):
+    update.message.reply_text('/start - begin\n/help - help\n/language - change language (en/ha)\nCommands for admins: /all /reload /stats /backup /find')
+
+def cmd_language(update: Update, context: CallbackContext):
+    chat_id = str(update.effective_chat.id)
+    update.message.reply_text(STRINGS['en']['start_lang_prompt'])
+    return ASK_LANG
+
+def cancel(update: Update, context: CallbackContext):
+    update.message.reply_text('Operation cancelled.')
+    return ConversationHandler.END
+
+def unknown(update: Update, context: CallbackContext):
+    update.message.reply_text('Sorry, I did not understand that command.')
+
+# ---------------- Startup & main ----------------
+def main():
+    global _df, _csv_mtime
+    load_sessions()
+    load_user_lang()
+    load_csv()
+    if not BOT_TOKEN:
+        logger.error('BOT_TOKEN environment variable not set. Exiting.')
+        return
+    # create updater
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    # Conversation handler
+    conv = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            ASK_LANG: [MessageHandler(Filters.text & ~Filters.command, ask_lang)],
+            ASK_EMAIL: [MessageHandler(Filters.text & ~Filters.command, ask_email)],
+            ASK_PHONE: [MessageHandler(Filters.text & ~Filters.command, ask_phone)],
+            MENU: [CallbackQueryHandler(menu_button_handler)],
+            CHOOSING_FIELD: [CallbackQueryHandler(menu_button_handler)],
+            TYPING_VALUE: [MessageHandler(Filters.text & ~Filters.command, receive_new_value)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+        allow_reentry=True
+    )
+
+    dp.add_handler(conv)
+    dp.add_handler(CommandHandler('help', cmd_help))
+    dp.add_handler(CommandHandler('language', cmd_language))
+    dp.add_handler(CommandHandler('all', cmd_all))
+    dp.add_handler(CommandHandler('reload', cmd_reload))
+    dp.add_handler(CommandHandler('stats', cmd_stats))
+    dp.add_handler(CommandHandler('backup', cmd_backup))
+    dp.add_handler(CommandHandler('find', cmd_find, pass_args=True))
+    dp.add_handler(MessageHandler(Filters.command, unknown))
+
+    # start watcher & reminder threads
+    _stop_event.clear()
+    t1 = threading.Thread(target=csv_watcher, daemon=True)
+    t1.start()
+    t2 = threading.Thread(target=reminder_thread, args=(updater,), daemon=True)
+    t2.start()
+
+    logger.info('%s starting...', BOT_NAME)
+    # Keep bot running
+    updater.start_polling()
+    updater.idle()
+
+    # cleanup
+    _stop_event.set()
+    t1.join(timeout=2)
+    t2.join(timeout=2)
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        logger.exception('Fatal error in bot main loop')
+        log_error(f'Fatal error: {e}')
