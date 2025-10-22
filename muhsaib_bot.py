@@ -316,12 +316,14 @@ def receive_new_value(update,context):
     update.message.reply_text('Updated record:\\n'+text,parse_mode=ParseMode.MARKDOWN); return MENU
 
 @admin_only
-def cmd_all(update,context):
+def cmd_all(update, context):
     with _data_lock:
-        if _df is None or _df.empty: update.message.reply_text('CSV empty'); return
-        cols=['FullName','Email','Phone','AdmissionNumber']
-        [update.message.reply_text(f"{i}: {row.to_dict()}") for i, row in _df[cols].iterrows()]
-
+        if _df is None or _df.empty:
+            update.message.reply_text('CSV empty')
+            return
+        cols = ['FullName', 'Email', 'Phone', 'AdmissionNumber']
+        for i, row in _df[cols].iterrows():
+            update.message.reply_text(f"{i}: {row.to_dict()}")
 @admin_only
 def cmd_reload(update,context):
     load_csv(); update.message.reply_text('CSV reloaded.')
