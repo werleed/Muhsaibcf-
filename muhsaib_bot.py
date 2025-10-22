@@ -12,7 +12,15 @@ from deep_translator import GoogleTranslator
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, ConversationHandler, CallbackContext
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes
+)
 
 # Config
 BOT_TOKEN = os.getenv('BOT_TOKEN')
