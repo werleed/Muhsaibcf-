@@ -311,7 +311,8 @@ def cmd_all(update,context):
     with _data_lock:
         if _df is None or _df.empty: update.message.reply_text('CSV empty'); return
         cols=['FullName','Email','Phone','AdmissionNumber']
-        for i,row in _df[cols].iterrows(): update.message.reply_text(f\"{i}: {row.to_dict()}\")
+        for i, row in _df[cols].iterrows():
+    update.message.reply_text(f"{i}: {row.to_dict()}")
 
 @admin_only
 def cmd_reload(update,context):
