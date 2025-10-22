@@ -462,7 +462,7 @@ def show_user_menu(update: Update, context: CallbackContext):
     left = days_left_to_edit()
     allowed = 'Yes' if editing_allowed() else 'No'
     if _user_lang.get(chat_id) == 'ha':
-        allowed = 'Eh' if editing_allowed() else 'A'a'
+        allowed = 'Eh' if editing_allowed() else "A'a"
     edit_note = tr(chat_id, 'menu_edit_note', left=left, allowed=allowed)
     kb = [
         [InlineKeyboardButton(tr(chat_id, 'menu_buttons')[0], callback_data='edit')],
