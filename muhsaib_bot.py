@@ -535,11 +535,22 @@ def main():
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set. Exiting.")
         return
+    # initial load (keep as-is)
     load_csv()
     app = build_app()
-    # Run polling with proper startup hook for PTB v20+
-    # on_startup accepts a coroutine function
-    app.run_polling(on_startup=startup)
+
+    # === FIXED STARTUP HANDLING ===
+    # Some PTB/Railway combinations don't accept `on_startup` in run_polling;
+    # run the async startup coroutine manually before starting the polling loop.
+    try:
+        # run startup coroutine with the app instance
+        asyncio.run(startup(app))
+        logger.info("Startup completed successfully (manual run).")
+    except Exception:
+        logger.exception("startup failed (manual run)")
+
+    # Now start long-polling (no on_startup argument)
+    app.run_polling()
 
 
 if __name__ == "__main__":
