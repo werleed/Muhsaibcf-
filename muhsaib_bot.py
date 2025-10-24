@@ -544,14 +544,17 @@ def main():
     # run the async startup coroutine manually before starting the polling loop.
     try:
         # run startup coroutine with the app instance
-        asyncio.run(startup(app))
+        import asyncio
+
+async def main():
+    try:
+        await startup(app)
         logger.info("Startup completed successfully (manual run).")
     except Exception:
-        logger.exception("startup failed (manual run)")
+        logger.exception("Startup failed (manual run).")
 
-    # Now start long-polling (no on_startup argument)
-    app.run_polling()
-
+    # Run the bot with proper asyncio event loop
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
