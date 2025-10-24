@@ -516,45 +516,69 @@ def build_app():
     return app
 
 
+# ---------------- STARTUP FUNCTION ----------------
 async def startup(app):
-    # load CSV and start watcher
+    """Load CSV, start background watcher, and log bot startup."""
     load_csv()
+
+    async def start_csv_watcher_with_retry():
+        """Keep csv_watcher running even if it crashes (auto-restart)."""
+        while True:
+            try:
+                await csv_watcher(app)
+            except Exception as e:
+                logger.exception(f"csv_watcher crashed: {e}")
+                await asyncio.sleep(5)  # small delay before retry
+
     try:
-        app.create_task(csv_watcher(app))
+        # Start watcher in background with retry safety
+        app.create_task(start_csv_watcher_with_retry())
     except Exception:
-        # older/newer PTB internals: create_task may still be available on the app
         try:
-            asyncio.create_task(csv_watcher(app))
+            asyncio.create_task(start_csv_watcher_with_retry())
         except Exception:
-            logger.exception("failed to start csv_watcher")
+            logger.exception("Failed to start csv_watcher")
+
     logger.info("Bot startup complete")
     log_action("bot_started")
 
 
-def main():
+# ---------------- MAIN FUNCTION ----------------
+async def main():
+    """Initialize and run the bot."""
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set. Exiting.")
         return
-    # initial load (keep as-is)
+
+    # Load CSV initially
     load_csv()
+
+    # Build Telegram app
     app = build_app()
 
-    # === FIXED STARTUP HANDLING ===
-    # Some PTB/Railway combinations don't accept `on_startup` in run_polling;
-    # run the async startup coroutine manually before starting the polling loop.
     try:
-        # run startup coroutine with the app instance
-        import asyncio
-
-async def main():
-    try:
+        # Run async startup tasks
         await startup(app)
         logger.info("Startup completed successfully (manual run).")
     except Exception:
         logger.exception("Startup failed (manual run).")
 
-    # Run the bot with proper asyncio event loop
-    await app.run_polling()
+    try:
+        # Start polling (no on_startup argument)
+        await app.run_polling(stop_signals=None)
+    except (KeyboardInterrupt, SystemExit):
+        logger.warning("Bot stopped manually.")
+    finally:
+        # Save CSV safely before shutdown
+        try:
+            df.to_csv("data.csv", index=False)
+            logger.info("Data saved successfully before exit.")
+        except Exception as e:
+            logger.error(f"Error saving CSV during shutdown: {e}")
+        logger.info("Shutdown complete.")
 
+
+# ---------------- ENTRY POINT ----------------
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
